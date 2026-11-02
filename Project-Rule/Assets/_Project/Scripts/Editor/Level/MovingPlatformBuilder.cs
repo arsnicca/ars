@@ -70,8 +70,12 @@ namespace RuleGame.Editor.Level
             BuildLabel(root.transform);
 
             var platform = root.AddComponent<MovingPlatform>();
-            // 默认给一段可见的行程，放下来立刻能跑；要站着不动就把终点拖到起点上。
+            // 默认是待客模式：放下来先停在起点，玩家踩上去才出发。
+            // 默认给一段可见的行程，省得忘了填终点；要站着不动就把终点拖到起点上。
             platform.SetPath(at, at + new Vector3(DefaultRun, 0f, 0f));
+            // 路径存成相对本物体的偏移：以后拖动平台 / 整关平移，终点不会留在原地。
+            // Reset() 通常已经切好了；这里再点一次，编辑器脚本里 AddComponent 不跑 Reset 的版本也不会漏。
+            platform.ConvertPathToRelative();
             EditorUtility.SetDirty(platform);
 
             Selection.activeGameObject = root;
@@ -79,7 +83,7 @@ namespace RuleGame.Editor.Level
 
             Debug.Log($"[地图组件] 已创建 {RootName}（层级 {SolidLayerName}）。" +
                       $"用 Inspector 上的「起点 / 终点 = 当前位置」按钮定路径，速度在「节奏」里调。" +
-                      $"当前行程 {DefaultRun} 个单位。");
+                      $"当前行程 {DefaultRun} 个单位；默认**站上去才出发**，到终点后回起点停住。");
         }
 
         private static void BuildBody(GameObject root, Sprite sprite)

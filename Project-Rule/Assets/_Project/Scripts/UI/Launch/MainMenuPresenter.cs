@@ -4,6 +4,7 @@ using RuleGame.Gameplay.Player;
 using RuleGame.Gameplay.Scene;
 using RuleGame.Infrastructure.Interaction;
 using RuleGame.Infrastructure.Time;
+using RuleGame.UI.Comic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UIElements;
@@ -103,7 +104,28 @@ namespace RuleGame.UI.Launch
             _started = true;
             _viewport.AddToClassList("hidden");
             ReleasePause();
-            _gameRoot.StartStreaming();
+
+            // 开场漫画：播完（或被跳过）才真的开始加载世界。没有序列时 TryPlayIntro 返回 false，照旧直接开局。
+            ComicPlayer comic = ComicPlayer.EnsureInstance();
+            if (!comic.TryPlayIntro(_gameRoot.StartStreaming)) _gameRoot.StartStreaming();
+        }
+
+        /// <summary>
+        /// 从游戏里回到主菜单：把标题界面叫回来，并重新接管暂停与输入。
+        /// </summary>
+        /// <remarks>
+        /// 世界侧（停流式加载 / 卸分区）由 <c>GameRoot.StopForMenu()</c> 负责 —— 那一层看不见本类，
+        /// 由 UI 层依次调用，依赖方向仍然是 UI → Gameplay。
+        /// </remarks>
+        public void ShowMenu()
+        {
+            if (!_initialized) return;
+
+            _started = false;
+            _modal?.AddToClassList("hidden");
+            _artboard?.SetEnabled(true);
+            _viewport?.RemoveFromClassList("hidden");
+            EnterMenu();
         }
 
         private void Bind(VisualElement root, string name, Action action)

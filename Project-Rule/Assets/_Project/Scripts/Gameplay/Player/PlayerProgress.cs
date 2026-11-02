@@ -22,9 +22,14 @@ namespace RuleGame.Gameplay.Player
     /// <see cref="ClaimedSourceIds"/> 这几个小集合（约束 C5：不序列化物理状态）。</para>
     /// </remarks>
     [DisallowMultipleComponent]
-    public sealed class PlayerProgress : MonoBehaviour, IRuleUnlocks, ICityRewardReceiver
+    public sealed class PlayerProgress : MonoBehaviour, IRuleUnlocks, ICityRewardReceiver,
+        RuleGame.Infrastructure.Persistence.IRuleUnlockStore,
+        RuleGame.Infrastructure.Persistence.IPlayerProgressStore
     {
         [SerializeField] private PlayerController _player;
+
+        [Tooltip("玩家的生命 / 能量组件。留空时自动取同一物体上的 EntityStatus。")]
+        [SerializeField] private EntityStatus _status;
 
         [Tooltip("开局就有的规则属性。默认只有「重力」—— 配合下面的「反转」，开局只开重力×反转。")]
         [SerializeField] private AttributeId[] _startingAttributes = { AttributeId.Gravity };
@@ -41,6 +46,15 @@ namespace RuleGame.Gameplay.Player
         private readonly HashSet<RelationId> _relations = new HashSet<RelationId>();
         private readonly HashSet<string> _claimed = new HashSet<string>();
 
+        // 读档回灌期间不发解锁事件：那不是「刚获得」，是「本来就有」。
+        // 解锁演出（AbilityUnlockOverlay）是暂停 + 黑幕，读档被一整串黑幕堵住就卡死了。
+        private bool _restoringUnlocks;
+
+        // 宝箱给的上限增量。**账本记绝对值**，EntityStatus 那份只是影子 ——
+        // 读档时用这里的数回灌，避免「场景上 0 + 档案里 40」两处各记一半。
+        private float _maxHealthBonus;
+        private float _maxEnergyBonus;
+
         /// <summary>刚解锁一项能力（参数是新增的那几位）。</summary>
         public event Action<PlayerAbility> AbilityUnlocked;
 
@@ -51,7 +65,30 @@ namespace RuleGame.Gameplay.Player
         public event Action<RelationId> RelationUnlocked;
 
         /// <summary>当前已解锁的能力位（存档只需要这一份）。</summary>
-        public PlayerAbility UnlockedAbilities => _player != null ? _player.UnlockedAbilities : PlayerAbility.None;
+        public PlayerAbility UnlockedAbilities => Player != null ? Player.UnlockedAbilities : PlayerAbility.None;
+
+        /// <summary>四项能力全部解锁。</summary>
+        public bool HasAllAbilities
+            => Player != null && (Player.UnlockedAbilities & PlayerAbility.All) == PlayerAbility.All;
+
+        /// <summary>
+        /// 规则是不是已经全解锁：六个属性与五个关系都在账本里。
+        /// 不看 <see cref="_unlockAllRulesForDevelopment"/> —— 那是调试开关，不是玩家进度。
+        /// </summary>
+        public bool HasAllRuleUnlocks
+        {
+            get
+            {
+                foreach (AttributeId attribute in Enum.GetValues(typeof(AttributeId)))
+                    if (!_attributes.Contains(attribute)) return false;
+                foreach (RelationId relation in Enum.GetValues(typeof(RelationId)))
+                    if (!_relations.Contains(relation)) return false;
+                return true;
+            }
+        }
+
+        /// <summary>镇长资格判据：规则全解锁 + 能力全解锁。</summary>
+        public bool HasAllUnlocks => HasAllRuleUnlocks && HasAllAbilities;
 
         /// <summary>已解锁的规则属性（存档只需要这一串）。</summary>
         public IReadOnlyCollection<AttributeId> UnlockedAttributes => _attributes;
@@ -62,10 +99,41 @@ namespace RuleGame.Gameplay.Player
         /// <summary>已领取的宝箱 / 奖励编号（存档只需要这一串）。</summary>
         public IReadOnlyCollection<string> ClaimedSourceIds => _claimed;
 
+        /// <summary>生命上限的累计奖励增量（宝箱）。</summary>
+        public float MaxHealthBonus => _maxHealthBonus;
+
+        /// <summary>能量上限的累计奖励增量（宝箱）。</summary>
+        public float MaxEnergyBonus => _maxEnergyBonus;
+
+        /// <summary>同一物体上的生命 / 能量组件（读档早于 Awake 时也能拿到）。</summary>
+        private EntityStatus Status
+        {
+            get
+            {
+                if (_status == null) _status = GetComponent<EntityStatus>();
+                return _status;
+            }
+        }
+
+        /// <summary>同一物体上的玩家控制（读档早于 Awake 时也能拿到）。</summary>
+        private PlayerController Player
+        {
+            get
+            {
+                if (_player == null) _player = GetComponent<PlayerController>();
+                return _player;
+            }
+        }
+
         private void Awake()
         {
             if (_player == null) _player = GetComponent<PlayerController>();
-            ResetRuleSets();
+            if (_status == null) _status = GetComponent<EntityStatus>();
+
+            // ⚠️ PersistenceDriver 执行序 −90，会在本组件的 Awake（默认 0）之前
+            // 用存档回灌词条。账本非空就说明读档已经填过，不能再塞开局默认值
+            // —— 否则「摩擦 / 失效……」这类宝箱词条重启一次就被清回 重力 × 反转。
+            if (_attributes.Count == 0 && _relations.Count == 0) ResetRuleSets();
         }
 
         /// <summary>
@@ -81,8 +149,25 @@ namespace RuleGame.Gameplay.Player
             _unlockAllRulesForDevelopment = false;
             _claimed.Clear();
             ResetRuleSets();
-            _player?.SetUnlockedAbilities(PlayerAbility.None);
+
+            // 上限增量也清零：新的一局从设计初值开始（存档读回来的那条路不走这里）。
+            _maxHealthBonus = 0f;
+            _maxEnergyBonus = 0f;
+            Status?.SetMaxVitalBonuses(0f, 0f);
+
+            Player?.SetUnlockedAbilities(PlayerAbility.None);
         }
+
+        /// <summary>
+        /// 续档：只关掉「开发期规则全开」，不动存档刚回灌的账本。
+        /// </summary>
+        /// <remarks>
+        /// <para>⚠️ 续档**不能**调 <see cref="StartNewGame"/>（会把读回来的词条 / 宝箱 / 能力清空），
+        /// 但也不能什么都不调：预制体上的 <c>_unlockAllRulesForDevelopment</c> 默认为 <c>true</c>
+        /// （方便直接进关卡场景调试），正式流程不把它关掉，规则轮盘就会放行玩家没解锁的词条。</para>
+        /// <para>由 <c>GameRoot.StartStreaming</c> 在续档分支调用。</para>
+        /// </remarks>
+        public void ContinueFromSave() => _unlockAllRulesForDevelopment = false;
 
         /// <summary>属性与关系都解锁了，这一格才可用。</summary>
         public bool IsUnlocked(AttributeId attribute, RelationId relation)
@@ -96,24 +181,25 @@ namespace RuleGame.Gameplay.Player
         /// <summary>解锁一项能力。已经解锁时返回 false，不会重复广播。</summary>
         public bool UnlockAbility(PlayerAbility ability)
         {
-            if (_player == null || !_player.UnlockAbility(ability)) return false;
+            PlayerController player = Player;
+            if (player == null || !player.UnlockAbility(ability)) return false;
             AbilityUnlocked?.Invoke(ability);
             return true;
         }
 
-        /// <summary>解锁一个规则属性。已经解锁时返回 false。</summary>
+        /// <summary>解锁一个规则属性。已经解锁时返回 false；读档回灌期间不广播事件。</summary>
         public bool UnlockAttribute(AttributeId attribute)
         {
             if (!_attributes.Add(attribute)) return false;
-            AttributeUnlocked?.Invoke(attribute);
+            if (!_restoringUnlocks) AttributeUnlocked?.Invoke(attribute);
             return true;
         }
 
-        /// <summary>解锁一个规则关系。已经解锁时返回 false。</summary>
+        /// <summary>解锁一个规则关系。已经解锁时返回 false；读档回灌期间不广播事件。</summary>
         public bool UnlockRelation(RelationId relation)
         {
             if (!_relations.Add(relation)) return false;
-            RelationUnlocked?.Invoke(relation);
+            if (!_restoringUnlocks) RelationUnlocked?.Invoke(relation);
             return true;
         }
 
@@ -127,7 +213,7 @@ namespace RuleGame.Gameplay.Player
             switch (reward.Kind)
             {
                 case CityRewardKind.Ability:
-                    if (_player == null || reward.Ability == PlayerAbility.None) return false;
+                    if (Player == null || reward.Ability == PlayerAbility.None) return false;
                     _claimed.Add(sourceId);
                     UnlockAbility(reward.Ability);
                     return true;
@@ -142,10 +228,133 @@ namespace RuleGame.Gameplay.Player
                     UnlockRelation(reward.Relation);
                     return true;
 
+                case CityRewardKind.Health:
+                    return GrantVitalMax(sourceId, reward.Amount, energy: false);
+
+                case CityRewardKind.Energy:
+                    return GrantVitalMax(sourceId, reward.Amount, energy: true);
+
                 default:
-                    // Power / Health / Energy 目前没有玩家侧结算，交给别家接收方。
+                    // 未知奖励类型（枚举里未定义的编号）：不认账，交给别家接收方或直接失败。
                     return false;
             }
+        }
+
+        /// <summary>
+        /// 生命 / 能量宝箱：把奖励量直接加在**上限**上，并把当前值同步抬高同一段。
+        /// </summary>
+        /// <remarks>
+        /// <para>先记账再兑现（与其它奖励同一条纪律）：<c>_claimed.Add</c> 之后即使
+        /// <c>EntityStatus</c> 抛错也不会出现「领了但没记」的重复领取。</para>
+        /// <para><b>为什么不走 <c>RestoreEnergy</c></b>：那只是回血回蓝，上限涨不上去，
+        /// 玩家吃满一条 100 的能量条就再也装不下。</para>
+        /// </remarks>
+        private bool GrantVitalMax(string sourceId, int amount, bool energy)
+        {
+            EntityStatus status = Status;
+            if (status == null || amount <= 0) return false;
+
+            _claimed.Add(sourceId);
+
+            if (energy)
+            {
+                _maxEnergyBonus += amount;
+                status.RaiseMaxEnergy(amount);
+            }
+            else
+            {
+                _maxHealthBonus += amount;
+                status.RaiseMaxHealth(amount);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 读档：整体替换宝箱记录与上限增量，并把增量回灌给 <see cref="EntityStatus"/>。
+        /// </summary>
+        /// <remarks>
+        /// <para>存的是**绝对值**，不是叠加量：读档时直接设成档里的数，不会把上一次会话的增量再加一遍。</para>
+        /// <para>必须在 <c>ApplyData</c> 之前调用 —— 那个方法按当前上限 clamp 生命 / 能量。</para>
+        /// </remarks>
+        public void RestoreProgress(IReadOnlyCollection<string> claimedSourceIds, float healthBonus, float energyBonus)
+        {
+            _claimed.Clear();
+            if (claimedSourceIds != null)
+            {
+                foreach (string id in claimedSourceIds)
+                    if (!string.IsNullOrWhiteSpace(id)) _claimed.Add(id);
+            }
+
+            _maxHealthBonus = Mathf.Max(0f, healthBonus);
+            _maxEnergyBonus = Mathf.Max(0f, energyBonus);
+
+            Status?.SetMaxVitalBonuses(_maxHealthBonus, _maxEnergyBonus);
+        }
+
+        // ==================================================================
+        //  IPlayerProgressStore：能力位的存档桥接（显式实现，接口只认整数）
+        // ==================================================================
+
+        int RuleGame.Infrastructure.Persistence.IPlayerProgressStore.UnlockedAbilities
+            => (int)this.UnlockedAbilities;
+
+        void RuleGame.Infrastructure.Persistence.IPlayerProgressStore.RestoreAbilities(int unlockedAbilities)
+            => Player?.SetUnlockedAbilities((PlayerAbility)unlockedAbilities);
+
+        // ==================================================================
+        //  IRuleUnlockStore：存档桥接（显式实现，避免与游戏内用的枚举集合重名冲突）
+        // ==================================================================
+
+        IReadOnlyList<string> RuleGame.Infrastructure.Persistence.IRuleUnlockStore.UnlockedAttributes
+            => ToNameList(_attributes);
+
+        IReadOnlyList<string> RuleGame.Infrastructure.Persistence.IRuleUnlockStore.UnlockedRelations
+            => ToNameList(_relations);
+
+        /// <summary>把存档里的词条名灌回来。名字对不上（旧档 / 配置改名）就跳过并留痕。</summary>
+        /// <remarks>整段不发 <see cref="AttributeUnlocked"/> / <see cref="RelationUnlocked"/>：
+        /// 读档不是「刚解锁」，不该弹解锁黑幕（那是要停游戏的）。轮盘每次打开都现读账本，不受影响。</remarks>
+        void RuleGame.Infrastructure.Persistence.IRuleUnlockStore.RestoreUnlocks(
+            IEnumerable<string> attributes, IEnumerable<string> relations)
+        {
+            _restoringUnlocks = true;
+            try
+            {
+                // 契约是「整体覆盖」：先清空，旧会话 / Awake 里塞的开局默认值不能混进来
+                // （否则档里没有的词条也会被当成已解锁）。
+                _attributes.Clear();
+                _relations.Clear();
+
+                if (attributes != null)
+                {
+                    foreach (string name in attributes)
+                    {
+                        if (Enum.TryParse(name, true, out AttributeId attr)) UnlockAttribute(attr);
+                        else Debug.LogWarning($"[PlayerProgress] 存档里的属性词条无法识别，已跳过：\"{name}\"。", this);
+                    }
+                }
+
+                if (relations != null)
+                {
+                    foreach (string name in relations)
+                    {
+                        if (Enum.TryParse(name, true, out RelationId rel)) UnlockRelation(rel);
+                        else Debug.LogWarning($"[PlayerProgress] 存档里的关系词条无法识别，已跳过：\"{name}\"。", this);
+                    }
+                }
+            }
+            finally
+            {
+                _restoringUnlocks = false;
+            }
+        }
+
+        private static IReadOnlyList<string> ToNameList<T>(IEnumerable<T> values)
+        {
+            var list = new List<string>();
+            foreach (T v in values) list.Add(v.ToString());
+            return list;
         }
 
         /// <summary>场景里找玩家身上的账本（没有返回 null）。</summary>

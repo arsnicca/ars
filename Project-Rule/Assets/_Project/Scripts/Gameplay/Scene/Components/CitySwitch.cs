@@ -17,6 +17,10 @@ namespace RuleGame.Gameplay.Scene.Components
         public bool Toggle = true;
         public bool IsOn;
 
+        [Tooltip("玩家能不能用 E / 攻击盒触发。关掉 = 只认重物（石头 / 铁箱 / 巨石）压住，"
+                 + "玩家按 E、砍一刀都不响 —— 给「必须用石头压」的机关用。")]
+        public bool PlayerInteractable = true;
+
         [Tooltip("接正式美术后勾上：刷新状态时不再改 SpriteRenderer 颜色（改由贴图/帧序列表达）。")]
         public bool KeepArtColor;
 
@@ -57,7 +61,7 @@ namespace RuleGame.Gameplay.Scene.Components
                  "⚠️ 判定走 OverlapCollider 轮询，不是触发回调（玩家的触发回调不可靠）。")]
         public bool PressByPlayerProximity;
         public UnityEvent<bool> OnChanged = new UnityEvent<bool>();
-        public override bool Available => Toggle || !IsOn;
+        public override bool Available => PlayerInteractable && (Toggle || !IsOn);
         public override bool Interact(PlayerController player)
         {
             if (!Available || Paused) return false;
@@ -121,12 +125,20 @@ namespace RuleGame.Gameplay.Scene.Components
             else if (Target != null) Target.SetSwitchState(on);
             if (IsOn == on) return;
             IsOn = on; RefreshVisual(); OnChanged.Invoke(IsOn);
+            RuleGame.Infrastructure.Persistence.WorldStateStore.SetBool(SaveStateKey, IsOn);
         }
+
         private void Start()
         {
+            // 读档恢复：这个开关在存档里是按下的，打开场景就要保持按下（连带把它驱动的门也带上）。
+            if (RuleGame.Infrastructure.Persistence.WorldStateStore.TryGet(SaveStateKey, out string saved)) SetOn(saved == "1");
+
             RefreshVisual();
             WarnIfTargetUnsupported();
         }
+
+        /// <summary>存档用的稳定键（场景名 + 层级路径 + 槽位）。</summary>
+        private string SaveStateKey => RuleGame.Infrastructure.Persistence.WorldStateStore.KeyOf(this, "on");
 
         /// <summary>FollowMotor 拖了既不认路径机、也不实现 <see cref="ISwitchTarget"/> 的东西 —— 报一次。</summary>
         private void WarnIfTargetUnsupported()

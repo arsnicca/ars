@@ -95,6 +95,11 @@ namespace RuleGame.Gameplay.Scene
         /// <summary>阶段变化（表现层 / 测试用）。</summary>
         public event System.Action<Phase> PhaseChanged;
 
+        /// <summary>Boss 被打死（运行时击杀发一次）。结尾演出的挂点。</summary>
+        /// <remarks>读档时 <c>Start</c> 直接把阶段拉成 <c>Cleared</c>，走的是另一条路、**不发**这个事件 ——
+        /// 所以结尾动画不会在读档时重播。</remarks>
+        public static event System.Action<BossEncounter> Cleared;
+
         // ==================================================================
         //  对外
         // ==================================================================
@@ -181,16 +186,29 @@ namespace RuleGame.Gameplay.Scene
             _topClosed = true;
         }
 
+        private void Start()
+        {
+            // 读档恢复：Boss 在存档里已经通关 —— 直接把阶段拉到 Cleared，别再重新开战。
+            if (!RuleGame.Infrastructure.Persistence.WorldStateStore.GetBool(SaveStateKey)) return;
+            Current = Phase.Cleared;
+            PhaseChanged?.Invoke(Current);
+        }
+
+        /// <summary>存档用的稳定键。</summary>
+        private string SaveStateKey => RuleGame.Infrastructure.Persistence.WorldStateStore.KeyOf(this, "cleared");
+
         private void Clear()
         {
             if (Current == Phase.Cleared) return;
 
             Current = Phase.Cleared;
+            RuleGame.Infrastructure.Persistence.WorldStateStore.SetBool(SaveStateKey, true);   // Boss 通关是永久进度
 
             SetGates(_sideDoors, true);
             SetGate(_topGate, true);
 
             PhaseChanged?.Invoke(Current);
+            Cleared?.Invoke(this);
             _onCleared.Invoke();
         }
 

@@ -7,6 +7,7 @@ using RuleGame.Gameplay.Combat;
 using RuleGame.Gameplay.Common;
 using RuleGame.Infrastructure.Interaction;
 using RuleGame.Infrastructure.Rules;
+using RuleGame.Infrastructure.Snapshot;
 
 namespace RuleGame.Gameplay.Player
 {
@@ -44,7 +45,8 @@ namespace RuleGame.Gameplay.Player
     /// 六个文件引用它。重构只搬内脏，不换壳。</para>
     /// </remarks>
     [RequireComponent(typeof(Rigidbody2D), typeof(Collider2D))]
-    public class PlayerController : MonoBehaviour, IKnockbackReceiver, IRuleSelectionInputGate, IMomentumSource
+    public class PlayerController : MonoBehaviour, IKnockbackReceiver, IRuleSelectionInputGate, IMomentumSource,
+                                    IHazardResponder
     {
         private readonly HashSet<object> _movementHolders = new HashSet<object>();
         public bool MovementHeld => _movementHolders.Count > 0;
@@ -98,10 +100,10 @@ namespace RuleGame.Gameplay.Player
         [SerializeField] private float _gravityScale = 3.83f;
 
         [Tooltip("下落时的额外重力倍率 —— 落得比升得快，滞空更紧凑。1 = 上下对称。")]
-        [SerializeField, Range(1f, 4f)] private float _fallGravityMultiplier = 2f;
+        [SerializeField, Range(1f, 4f)] private float _fallGravityMultiplier = 1.3f;
 
         [Tooltip("下落速度上限（终端速度）。防止长距离下落越来越快、难以阅读。")]
-        [SerializeField] private float _maxFallSpeed = 30f;
+        [SerializeField] private float _maxFallSpeed = 16f;
 
         [Tooltip("地面减速度基准。实际减速度 = 本值 × 脚下地面材质的摩擦系数 × 摩擦规则缩放。" +
                  "所以「冰面」= 给地面挂一个摩擦很小的 PhysicsMaterial2D。")]
@@ -124,14 +126,22 @@ namespace RuleGame.Gameplay.Player
         [SerializeField] private float _jumpBuffer = 0.12f;
 
         [Header("冲刺")]
-        [Tooltip("冲刺速度。远高于 _moveSpeedMax，要的就是爆发感。")]
-        [SerializeField] private float _dashSpeed = 26f;
+        [Tooltip("冲刺速度的**峰值**（中段平顶）。起手从跑速升上来、收尾再降回去，见下面两个斜坡。")]
+        [SerializeField] private float _dashSpeed = 16.4f;
 
-        [Tooltip("冲刺持续秒数。冲刺距离 = 本值 × _dashSpeed（26 × 0.18 ≈ 4.7 米）。")]
-        [SerializeField] private float _dashDuration = 0.18f;
+        [Tooltip("冲刺持续秒数。**距离不是 峰值 × 时长**，要按梯形曲线积分。\n" +
+                 "60Hz 下当前配置 ≈ 4.34 米，与改版前（26 m/s × 0.18 s 的离散步进）一致。")]
+        [SerializeField] private float _dashDuration = 0.28f;
 
-        [Tooltip("冲刺结束时保留多少速度。1 = 冲完像被弹射出去，0.35 = 收得住。")]
-        [SerializeField, Range(0f, 1f)] private float _dashExitSpeedScale = 0.35f;
+        [Tooltip("起手加速占冲刺时长的比例：跑速 → 峰值。0 = 一按就到峰值。")]
+        [SerializeField, Range(0f, 0.5f)] private float _dashRampUp = 0.05f;
+
+        [Tooltip("收尾减速占冲刺时长的比例：峰值 → 跑速。曲线已经负责收速，别和 _dashExitSpeedScale 叠加。")]
+        [SerializeField, Range(0f, 0.5f)] private float _dashRampDown = 0.06f;
+
+        [Tooltip("冲刺结束时保留多少速度。曲线已把速度降到跑速，这里保持 1 即可；" +
+                 "调小会让收尾猛地一卡。")]
+        [SerializeField, Range(0f, 1f)] private float _dashExitSpeedScale = 1f;
 
         [Tooltip("冲刺次数上限，落地回满。0 = 没有冲刺。")]
         [SerializeField, Range(0, 3)] private int _maxDashes = 1;
@@ -196,6 +206,14 @@ namespace RuleGame.Gameplay.Player
         [Header("击退")]
         [Tooltip("外部冲量每秒的衰减量。")]
         [SerializeField] private float _knockbackDecay = 30f;
+
+        [Header("受击节奏")]
+        [Tooltip("角色命中定格的游戏秒数；不改变全局时间倍率。")]
+        [SerializeField, Range(0f, .12f)] private float _hurtImpactPause = .055f;
+        [Tooltip("定格之后的短硬直；期间保留重力、风和碰撞，阻止自主动作。")]
+        [SerializeField, Range(.1f, .5f)] private float _hurtRecovery = .22f;
+        [Tooltip("受击硬直内的外部击退衰减；较慢收速，让接触伤害也能弹开约一个身位。")]
+        [SerializeField, Min(0f)] private float _hurtKnockbackDecay = 20f;
 
         [Header("推动（重物）")]
         /// <summary>
@@ -380,6 +398,16 @@ namespace RuleGame.Gameplay.Player
                  "两者取晚的那个（表现层用 HoldRespawn / ReleaseRespawnHold 挂等待）。")]
         [SerializeField, Min(0f)] private float _respawnDelay = 1.2f;
 
+        [Header("刺击回落")]
+        [Tooltip("被刺格命中后立刻回到上一次安全站立的瓦片地面。关掉 = 只吃伤害与击退。")]
+        [SerializeField] private bool _hazardReturnEnabled = true;
+
+        [Tooltip("两次回落之间的最小间隔（秒）。与受击无敌帧、刺格的重复间隔叠加。")]
+        [SerializeField, Min(0f)] private float _hazardReturnCooldown = 0.5f;
+
+        [Tooltip("判「无刺」时受击箱向外扩的余量（米）。站在刺边时不把那个位置记成安全点。")]
+        [SerializeField, Min(0f)] private float _hazardReturnMargin = 0.18f;
+
         // ==================================================================
         //  自身
         // ==================================================================
@@ -389,6 +417,11 @@ namespace RuleGame.Gameplay.Player
 
         /// <summary>死亡标记的持有者；复活要清它。同物体上没有就不清（只回血）。</summary>
         private EntityDamageable _damageable;
+        private SnapshotSystem _hurtSnapshots;
+        private float _hurtPauseLeft, _hurtRecoveryLeft;
+        public bool IsHurt => _hurtPauseLeft > 0f || _hurtRecoveryLeft > 0f;
+        public bool IsInHurtImpactPause => _hurtPauseLeft > 0f;
+        public float HurtRecoveryDuration => _hurtRecovery;
 
         // ---------------- 落点（内存，不落盘 —— 约束 C5） ----------------
 
@@ -412,6 +445,17 @@ namespace RuleGame.Gameplay.Player
 
         /// <summary>当前落点的世界坐标。</summary>
         private Vector2 _respawnPosition;
+
+        // ---------------- 安全落点（内存，不落盘 —— 约束 C5） ----------------
+
+        /// <summary>最后站立的「无刺瓦片地面」。被刺打中时回到这里，不是复活点。</summary>
+        private SafeGroundMemory _safeGround;
+
+        /// <summary>受击箱的 Trigger 碰撞体：判「无刺」用它，和真正会造成伤害的几何一致。</summary>
+        private Collider2D _hurtboxArea;
+
+        /// <summary>下一次允许回落的时间（<c>Time.time</c>）。防止同一片刺里连续传送。</summary>
+        private float _hazardReturnUntil;
 
         // ==================================================================
         //  职能类
@@ -466,6 +510,13 @@ namespace RuleGame.Gameplay.Player
 
         /// <summary>落地瞬间（接地判定 false → true）。</summary>
         public event Action OnLanded;
+
+        /// <summary>被刺格打中并成功搬回安全落点。表现层可接闪白 / 音效。</summary>
+        public event Action OnHazardReturned;
+
+        /// <summary>刚被 <see cref="TeleportTo"/> 搬到新位置。表现层用它清掉跟随旧位置的特效。</summary>
+        /// <remarks>此时刚体位置已经写好、物理变换已同步；订阅者不要再改位置。</remarks>
+        public event Action OnTeleported;
 
         /// <summary>冲刺开始瞬间（次数已扣、方向已定）。</summary>
         public event Action OnDashed;
@@ -525,6 +576,8 @@ namespace RuleGame.Gameplay.Player
             _mover    ??= new MotionMover(_body);          // 刚体的 Kinematic 配置在这里面
             _wind     ??= new WindSensor(_body, bodyCollider);
             _push     ??= new PushSensor(_body);
+            _safeGround ??= new SafeGroundMemory(bodyCollider);
+            _hurtboxArea ??= FindHurtboxArea();
 
             _dash.Reset(BuildTuning());                 // 起手就有冲刺，不必先落地一次
             _initialized = true;
@@ -538,13 +591,63 @@ namespace RuleGame.Gameplay.Player
             return true;
         }
 
+        /// <summary>受击箱的 Trigger 碰撞体；没有就返回 null（安全落点会退回身体包围盒）。</summary>
+        private Collider2D FindHurtboxArea()
+        {
+            var box = GetComponentInChildren<Hurtbox>(true);
+            return box != null ? box.Area : null;
+        }
+
         private void OnEnable()
         {
             EnsureInit("OnEnable");     // 组件被重新启用时补齐（Awake 可能根本没跑过）
             _input?.Enable();
+            if (_damageable != null) _damageable.OnDamageTaken += HandleDamageTaken;
+            BindHurtSnapshots();
         }
 
-        private void OnDisable() => _input?.Disable();
+        private void OnDisable()
+        {
+            _input?.Disable();
+            if (_damageable != null) _damageable.OnDamageTaken -= HandleDamageTaken;
+            if (_hurtSnapshots != null) _hurtSnapshots.OnRestored -= ClearHurt;
+            _hurtSnapshots = null;
+            ClearHurt();
+        }
+
+        private void BindHurtSnapshots()
+        {
+            if (_hurtSnapshots == SnapshotSystem.Instance) return;
+            if (_hurtSnapshots != null) _hurtSnapshots.OnRestored -= ClearHurt;
+            _hurtSnapshots = SnapshotSystem.Instance;
+            if (_hurtSnapshots != null) _hurtSnapshots.OnRestored += ClearHurt;
+        }
+
+        private void HandleDamageTaken(RuleGame.Infrastructure.DamageInfo damage)
+        {
+            if (!isActiveAndEnabled || !EnsureInit(nameof(HandleDamageTaken))) return;
+            MotionTuning tuning = BuildTuning();
+            _dash.Cancel(tuning);
+            _attack.Cancel();
+            _heavy.Cancel(tuning);
+            _jump.ClearBufferedInput();
+            _input.Tick(true);
+            _mover.CancelSelfMotion();
+            _mover.FreezeStep();
+            _hurtPauseLeft = _hurtImpactPause;
+            _hurtRecoveryLeft = _hurtRecovery;
+        }
+
+        private void ClearHurt()
+        {
+            _hurtPauseLeft = _hurtRecoveryLeft = 0f;
+            _dash?.Cancel(BuildTuning());
+            _attack?.Cancel();
+            _heavy?.Cancel(BuildTuning());
+            _jump?.ClearBufferedInput();
+            _mover?.Halt();
+            _mover?.FreezeStep();
+        }
 
         // ==================================================================
         //  输入（视觉帧）
@@ -552,8 +655,9 @@ namespace RuleGame.Gameplay.Player
 
         private void Update()
         {
-            // 暂停 / 已阵亡 / 被 UI 接管 / 门禁刚释放的恢复帧 —— 四种都不读键，并清空粘滞标记。
-            _input.Tick(IsPaused || IsDead || _input.IsSuppressed);
+            BindHurtSnapshots();
+            // 暂停 / 阵亡 / 受击 / UI 接管及门禁恢复帧都清空动作输入。
+            _input.Tick(IsPaused || IsDead || IsHurt || _input.IsSuppressed);
 
             // 倒计时与「落点」有关，与输入无关，所以放在门禁之外。
             TickRespawn();
@@ -609,11 +713,19 @@ namespace RuleGame.Gameplay.Player
             //（文档 §5）—— 不需要额外的暂停分支。
             if (IsPaused)
             {
-                _mover.Halt();
+                if (IsHurt) _mover.FreezeStep();
+                else _mover.Halt();
                 return;
             }
 
             float dt = Time.fixedDeltaTime;
+            if (IsInHurtImpactPause)
+            {
+                _hurtPauseLeft = Mathf.Max(0f, _hurtPauseLeft - dt);
+                _input.Sample();
+                _mover.FreezeStep();
+                return;
+            }
 
             // 参数每物理帧重打包一次（运行期改字段立刻生效），这一帧内共用同一份。
             MotionTuning tuning = BuildTuning();
@@ -623,6 +735,7 @@ namespace RuleGame.Gameplay.Player
 
             // ① 接触：Sense 内部先解出「上」方向（探测得先知道哪边是下），再扫地面与左右墙。
             PlayerInput.State   input   = _input.Sample();
+            if (IsHurt || IsDead) input = default;
             // 时间恒定：窗口内的定点回溯。窗口没开时 TryRewind() 返回 false，是空操作。
             // 放在物理帧：回溯会直接写回所有实体的刚体位置，与物理步进同一节拍更安全。
             if (input.RewindPressed) TryRewindTime();
@@ -632,6 +745,9 @@ namespace RuleGame.Gameplay.Player
                                                            input.AttackPressed, throwPressed: input.ThrowPressed);
             ContactSensor.State contact = _contacts.Sense(tuning);
             if (contact.JustLanded) OnLanded?.Invoke();
+
+            // ①′ 安全落点：站在合格的瓦片地面上就刷新；离地后自然冻结。
+            if (_hazardReturnEnabled) _safeGround.Observe(contact, _hurtboxArea, _hazardReturnMargin);
 
             // ①′ 风场：另一路环境输入。报的是力，除以质量后才进解算（见 WindSensor）。
             Vector2 windAccel = _wind.Sense(tuning);
@@ -704,6 +820,7 @@ namespace RuleGame.Gameplay.Player
             //    方向取 _mover.Facing（**换算后**的朝向）：摩擦反转时按右往左走，
             //    推的方向要跟着人实际去的方向，不能跟按键。
             _push.Push(tuning, input.Move, _mover.Facing);
+            _hurtRecoveryLeft = Mathf.Max(0f, _hurtRecoveryLeft - dt);
         }
 
         // ==================================================================
@@ -719,6 +836,12 @@ namespace RuleGame.Gameplay.Player
 
         /// <summary>是否站在支撑面上（供踩踏判定与调试用）。</summary>
         public bool IsGrounded => _contacts != null && _contacts.Grounded;
+
+        /// <summary>当前有没有可用的安全落点（调试 / 验证用）。</summary>
+        public bool HasSafeGround => _safeGround != null && _safeGround.HasSpot;
+
+        /// <summary>安全落点的世界坐标（调试 / 验证用；没有点时为零向量）。</summary>
+        public Vector2 SafeGroundPosition => _safeGround != null ? _safeGround.Position : Vector2.zero;
 
         /// <summary>
         /// 身体现在是不是已经按重力倒过来了（<see cref="ApplyGravityFacing"/> 的结果）。
@@ -956,7 +1079,7 @@ namespace RuleGame.Gameplay.Player
         //  落点 / 重生（内存，不落盘 —— 约束 C5）
         // ==================================================================
 
-        /// <summary>是否已经有一个可用的落点（出生或走近过某个 <c>PlayerSpawnPoint</c>）。</summary>
+        /// <summary>是否已经有一个可用的落点（出生或攻击激活过某个 <c>PlayerSpawnPoint</c>）。</summary>
         public bool HasRespawn { get; private set; }
 
         /// <summary>
@@ -986,7 +1109,7 @@ namespace RuleGame.Gameplay.Player
         // ==================================================================
 
         /// <summary>
-        /// 记录一个落点。由 <c>PlayerSpawnPoint</c> 在玩家走进激活半径时调用。
+        /// 记录一个落点。由 <c>PlayerSpawnPoint</c> 在攻击命中（或开局 / 车站到达）时调用。
         /// </summary>
         /// <remarks>
         /// <para>同一个点、同一个位置被反复调用是常态（玩家在点边上走来走去），
@@ -1016,6 +1139,7 @@ namespace RuleGame.Gameplay.Player
         /// </remarks>
         public void TeleportTo(Vector2 position)
         {
+            ClearHurt();
             _mover?.Halt();
 
             if (_body != null)
@@ -1026,6 +1150,7 @@ namespace RuleGame.Gameplay.Player
             }
 
             transform.position = new Vector3(position.x, position.y, transform.position.z);
+            OnTeleported?.Invoke();
         }
 
         /// <summary>
@@ -1040,6 +1165,7 @@ namespace RuleGame.Gameplay.Player
             }
 
             _respawnHeld      = false;          // 显式复活（调试键 / 关卡脚本）不等演出
+            _safeGround?.Forget();              // 死亡前的安全点作废，复活后的第一个接地帧重新记
             TeleportTo(_respawnPosition);
             _respawnCountdown = _respawnDelay;
 
@@ -1047,6 +1173,36 @@ namespace RuleGame.Gameplay.Player
             if (_damageable != null) _damageable.Revive();
             else if (_status != null && _status.Health <= 0f) _status.ApplyHealthDelta(_status.HealthMax);
 
+            return true;
+        }
+
+        /// <summary>
+        /// 被刺格命中：立刻回到上一次安全站立的瓦片地面。
+        /// </summary>
+        /// <remarks>
+        /// <para>由 <c>HazardField</c> 在伤害结算之后、同一物理帧调用（见 <see cref="IHazardResponder"/>）。
+        /// 这里先复验再传送：Up 一致、瓦片还在、仍然无刺，任何一条不满足就保持正常击退。</para>
+        /// <para>传送用 <see cref="TeleportTo"/>：它内部 <c>Halt</c> 清速度 + 清击退 + <c>SyncTransforms</c>，
+        /// 所以刺刚加的那一下击退不会活过这一帧。冲刺要单独取消，否则剩余冲刺帧会立刻把人带下平台。</para>
+        /// <para>⚠️ 致死的那一下不回落：让死亡 / 复活流程接管，否则尸体会先被搬回平台再播死亡动画。</para>
+        /// </remarks>
+        public bool OnHazardContact(Vector2 hazardPoint)
+        {
+            if (!_hazardReturnEnabled) return false;
+            if (!EnsureInit(nameof(OnHazardContact))) return false;
+            if (IsDead || IsPaused) return false;
+            if (Time.time < _hazardReturnUntil) return false;
+
+            if (_safeGround == null) return false;
+            if (!_safeGround.TryRecall(_contacts.Up, _solidLayer, out Vector2 spot)) return false;
+
+            _hazardReturnUntil = Time.time + _hazardReturnCooldown;
+
+            // 冲刺还剩几帧：不取消的话，传送后下一帧就会被残余冲刺带下平台。
+            _dash.Cancel(BuildTuning());
+
+            TeleportTo(spot);
+            OnHazardReturned?.Invoke();
             return true;
         }
 
@@ -1118,6 +1274,13 @@ namespace RuleGame.Gameplay.Player
         /// </remarks>
         public bool IsInputBlocked => _input == null || _input.IsBlocked;
 
+        /// <summary>
+        /// 本帧是否有新的玩法输入（不受门禁影响，给过场「按任意键继续」用）。
+        /// </summary>
+        /// <remarks>过场自己拿着 <see cref="BlockGameplayInput"/> 的令牌时，普通输入读不到，
+        /// 但仍要能感知玩家想结束演出 —— 与 <see cref="IsGameplayInputSuppressed"/> 是两回事。</remarks>
+        public bool AnyGameplayInputThisFrame() => _input != null && _input.AnyGameplayInputThisFrame();
+
         // ==================================================================
         //  击退
         // ==================================================================
@@ -1158,7 +1321,7 @@ namespace RuleGame.Gameplay.Player
 
             // 能量恢复来源之一：命中即回，未命中不给（策划案 §四）。
             if (hits > 0 && _status != null)
-                _status.RestoreEnergy(_energyPerHit * hits);
+                _combat.RestoreEnergy(_status, _energyPerHit * hits);
         }
 
         /// <summary>
@@ -1219,6 +1382,14 @@ namespace RuleGame.Gameplay.Player
         /// <summary>攻击判定体 + 贴墙探针：调参时直接看得到范围与朝向。</summary>
         private void OnDrawGizmosSelected()
         {
+            // 安全落点：绿色小球 + 一条朝「上」的短线，调余量时看它有没有贴着刺边。
+            if (_safeGround != null && _safeGround.HasSpot)
+            {
+                Gizmos.color = new Color(0.2f, 0.9f, 0.4f, 0.9f);
+                Gizmos.DrawWireSphere(_safeGround.Position, 0.18f);
+                Gizmos.DrawLine(_safeGround.Position, _safeGround.Position + _safeGround.Up * 0.4f);
+            }
+
             // 轻击（橙）与重击（红）各画一个 —— 重击的盒更大、偏移更远，
             // 不画出来就没法目视调 _heavyBoxSize / _heavyBoxOffset。
             Gizmos.color = new Color(1f, 0.45f, 0.2f, 0.8f);
@@ -1273,6 +1444,8 @@ namespace RuleGame.Gameplay.Player
 
             DashSpeed            = _dashSpeed,
             DashDuration         = _dashDuration,
+            DashRampUp           = _dashRampUp,
+            DashRampDown         = _dashRampDown,
             DashExitSpeedScale   = _dashExitSpeedScale,
             DashCooldown         = _dashCooldown,
             MaxDashes            = _maxDashes,
@@ -1294,7 +1467,7 @@ namespace RuleGame.Gameplay.Player
 
             WindLayer            = _windLayer,
 
-            KnockbackDecay       = _knockbackDecay,
+            KnockbackDecay       = IsHurt ? _hurtKnockbackDecay : _knockbackDecay,
 
             PushStrength         = _pushStrength,
             PushProbeDistance    = _pushProbeDistance,

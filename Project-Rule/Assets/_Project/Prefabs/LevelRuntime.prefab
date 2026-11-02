@@ -38,6 +38,8 @@ Transform:
   - {fileID: 1386674587553236161}
   - {fileID: 703064085621951207}
   - {fileID: 7237762578797139390}
+  - {fileID: 755937313140824467}
+  - {fileID: 4075005351229066971}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &6689891912237384207
@@ -99,13 +101,13 @@ GameObject:
   - component: {fileID: 5714247369272765345}
   - component: {fileID: 4369594674464734835}
   - component: {fileID: 2895808581285521288}
-  - component: {fileID: 4815626553428127705}
   - component: {fileID: 6857249214650424030}
   - component: {fileID: 6048151562633117209}
   - component: {fileID: 3563518010594046544}
   - component: {fileID: 299994958780319301}
   - component: {fileID: 7370011223344556677}
   - component: {fileID: 4606752304995385716}
+  - component: {fileID: 2227957493050132209}
   m_Layer: 0
   m_Name: Player
   m_TagString: Untagged
@@ -122,7 +124,7 @@ Transform:
   m_GameObject: {fileID: 701508034279411341}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -4.05, y: 5.54, z: 0}
+  m_LocalPosition: {x: -4.08, y: 5.7, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -205,6 +207,8 @@ MonoBehaviour:
   _jumpBuffer: 0.12
   _dashSpeed: 26
   _dashDuration: 0.18
+  _dashRampUp: 0.05
+  _dashRampDown: 0.06
   _dashExitSpeedScale: 0.35
   _maxDashes: 1
   _dashCooldown: 0.25
@@ -229,9 +233,12 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 2048
   _knockbackDecay: 30
+  _hurtImpactPause: 0.055
+  _hurtRecovery: 0.22
+  _hurtKnockbackDecay: 20
   _pushStrength: 60
   _pushProbeDistance: 0.15
-  _unlockedAbilities: 15
+  _unlockedAbilities: -1
   _status: {fileID: 5714247369272765345}
   _combat: {fileID: 1882199678892831726}
   _attackDamage: 10
@@ -259,6 +266,9 @@ MonoBehaviour:
   _energyPerHit: 4
   _respawnOnDeath: 1
   _respawnDelay: 1.2
+  _hazardReturnEnabled: 1
+  _hazardReturnCooldown: 0.5
+  _hazardReturnMargin: 0.18
 --- !u!114 &2895808581285521288
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -279,30 +289,6 @@ MonoBehaviour:
   _invincibleSeconds: 0.5
   _knockbackResistance: 0
   _knockbackLift: 0.4
---- !u!114 &4815626553428127705
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 701508034279411341}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 368ffb84407f475abefc2a0f594c6c17, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: RuleGame.Development::RuleGame.Development.P3.P3DebugOverlay
-  _status: {fileID: 0}
-  _damageable: {fileID: 0}
-  _player: {fileID: 0}
-  _combat: {fileID: 1882199678892831726}
-  _rules: {fileID: 196069887920428972}
-  _testDamage: 10
-  _testKnockback: 6
-  _attackFrom: {fileID: 0}
-  _velocityLogInterval: 0.1
-  _detectFrozenMotion: 1
-  _frozenSpeedThreshold: 1
-  _frozenLogInterval: 0.5
 --- !u!70 &6857249214650424030
 CapsuleCollider2D:
   m_ObjectHideFlags: 0
@@ -337,8 +323,8 @@ CapsuleCollider2D:
   m_UsedByEffector: 0
   m_CompositeOperation: 0
   m_CompositeOrder: 0
-  m_Offset: {x: -0.03821665, y: 0.1082499}
-  m_Size: {x: 0.76489246, y: 1.1877577}
+  m_Offset: {x: -0.032586694, y: 0.14099997}
+  m_Size: {x: 0.82338023, y: 1.122307}
   m_Direction: 0
 --- !u!114 &6048151562633117209
 MonoBehaviour:
@@ -411,9 +397,39 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: RuleGame.Gameplay::RuleGame.Gameplay.Player.PlayerProgress
   _player: {fileID: 4369594674464734835}
+  _status: {fileID: 5714247369272765345}
   _startingAttributes: 00000000i
   _startingRelations: 00000000i
   _unlockAllRulesForDevelopment: 1
+--- !u!114 &2227957493050132209
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 701508034279411341}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6bd339a1159484e2f9f976684ed42e99, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: RuleGame.Npcs::RuleGame.Gameplay.Npcs.NpcPlayerInteraction
+  _host: {fileID: 4980979459050501632}
+  _npcs: []
+  _onAdvanceDialogue:
+    m_PersistentCalls:
+      m_Calls:
+      - m_Target: {fileID: 3915397559216223104}
+        m_TargetAssemblyTypeName: RuleGame.UI.Dialogue.DialogueToolkitPresenter, RuleGame.Dialogue.UI
+        m_MethodName: Advance
+        m_Mode: 0
+        m_Arguments:
+          m_ObjectArgument: {fileID: 0}
+          m_ObjectArgumentAssemblyTypeName: 
+          m_IntArgument: 0
+          m_FloatArgument: 0
+          m_StringArgument: 
+          m_BoolArgument: 0
+        m_CallState: 2
 --- !u!1 &863040203698951685
 GameObject:
   m_ObjectHideFlags: 0
@@ -441,7 +457,7 @@ Transform:
   m_GameObject: {fileID: 863040203698951685}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -4.05, y: 6.24, z: -10}
+  m_LocalPosition: {x: -4.08, y: 6.3999996, z: -10}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -472,7 +488,7 @@ MonoBehaviour:
     CustomLookAtTarget: 0
   Lens:
     FieldOfView: 40
-    OrthographicSize: 4
+    OrthographicSize: 6
     NearClipPlane: 0.1
     FarClipPlane: 5000
     Dutch: 0
@@ -508,7 +524,7 @@ MonoBehaviour:
     ScreenPosition: {x: 0, y: 0}
     DeadZone:
       Enabled: 1
-      Size: {x: 0.084375, y: 0.08}
+      Size: {x: 0.12, y: 0.28}
     HardLimits:
       Enabled: 0
       Size: {x: 0.8, y: 0.8}
@@ -517,7 +533,7 @@ MonoBehaviour:
   TargetOffset: {x: 0, y: 0.7, z: 0}
   Damping: {x: 0.12, y: 0.06, z: 0}
   Lookahead:
-    Enabled: 1
+    Enabled: 0
     Time: 0.2
     Smoothing: 0
     IgnoreY: 0
@@ -613,6 +629,77 @@ SpriteRenderer:
   m_WasSpriteAssigned: 0
   m_SpriteSortPoint: 0
   m_BlendShapeWeights: []
+--- !u!1 &3159268247125474950
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 755937313140824467}
+  - component: {fileID: 4230823773580730256}
+  - component: {fileID: 293738252614972466}
+  m_Layer: 0
+  m_Name: Pause Menu
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &755937313140824467
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3159268247125474950}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4502221175975341964}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &4230823773580730256
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3159268247125474950}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 19102, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.dll::UnityEngine.UIElements.UIDocument
+  m_PanelSettings: {fileID: 11400000, guid: 0602237f7e073a942879f9b2b33ab152, type: 2}
+  m_ParentUI: {fileID: 0}
+  sourceAsset: {fileID: 9197481963319205126, guid: 6cd7299695f4fc94ba386a8cc320a4af, type: 3}
+  m_SortingOrder: 300
+  m_Position: 0
+  m_WorldSpaceSizeMode: 1
+  m_WorldSpaceWidth: 1920
+  m_WorldSpaceHeight: 1080
+  m_PivotReferenceSize: 0
+  m_Pivot: 0
+  m_WorldSpaceCollider: {fileID: 0}
+--- !u!114 &293738252614972466
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3159268247125474950}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6ae69cc6f8a45c94396e36aba7e7dfa1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: RuleGame.UI::RuleGame.UI.Pause.PauseMenuPresenter
+  _player: {fileID: 4369594674464734835}
+  _mainMenu: {fileID: 0}
+  _fadeBehaviour: {fileID: 0}
 --- !u!1 &3221797611552797144
 GameObject:
   m_ObjectHideFlags: 0
@@ -758,7 +845,7 @@ Transform:
   m_GameObject: {fileID: 3893316903970576085}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 1.15, y: -2.8799996, z: -10}
+  m_LocalPosition: {x: 42.859997, y: -27.17, z: -19}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -800,7 +887,7 @@ Camera:
   far clip plane: 5000
   field of view: 40
   orthographic: 1
-  orthographic size: 4
+  orthographic size: 6
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -1124,6 +1211,7 @@ GameObject:
   - component: {fileID: 7237762578797139390}
   - component: {fileID: 3903833097998827962}
   - component: {fileID: 409812805840727037}
+  - component: {fileID: 409812805840727038}
   m_Layer: 0
   m_Name: Player Vitals
   m_TagString: Untagged
@@ -1182,7 +1270,23 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: RuleGame.UI::RuleGame.UI.Launch.PlayerVitalsPresenter
   _status: {fileID: 5714247369272765345}
-  _progress: {fileID: 4606752304995385716}
+--- !u!114 &409812805840727038
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6252890892048904602}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7c1e4b93d5a24f0e8b6d2a9f3c5e7b10, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: RuleGame.UI::RuleGame.UI.Launch.AbilityUnlockOverlay
+  _player: {fileID: 0}
+  _progress: {fileID: 0}
+  _fadeInSeconds: 0.25
+  _fadeOutSeconds: 0.2
+  _inputGraceSeconds: 0.15
 --- !u!1 &6617420305150054304
 GameObject:
   m_ObjectHideFlags: 0
@@ -1250,8 +1354,8 @@ CapsuleCollider2D:
   m_UsedByEffector: 0
   m_CompositeOperation: 0
   m_CompositeOrder: 0
-  m_Offset: {x: -0.03821665, y: 0.1082499}
-  m_Size: {x: 0.5736693, y: 0.8908183}
+  m_Offset: {x: -0.0087121725, y: 0.07136941}
+  m_Size: {x: 0.24912095, y: 0.7875533}
   m_Direction: 0
 --- !u!114 &7273972463941713872
 MonoBehaviour:
@@ -1331,7 +1435,6 @@ GameObject:
   - component: {fileID: 1072998228990704747}
   - component: {fileID: 196069887920428972}
   - component: {fileID: 1882199678892831726}
-  - component: {fileID: 9086114315502287884}
   m_Layer: 0
   m_Name: Systems
   m_TagString: Untagged
@@ -1379,17 +1482,87 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: dfdebf9b3dd503c679261d1873e26842, type: 3}
   m_Name: 
   m_EditorClassIdentifier: RuleGame.Gameplay::RuleGame.Gameplay.Combat.CombatSystem
---- !u!114 &9086114315502287884
-MonoBehaviour:
+--- !u!1001 &5529022413425279261
+PrefabInstance:
   m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 4502221175975341964}
+    m_Modifications:
+    - target: {fileID: 2460209192187932116, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_Name
+      value: NpcDialogueSystem
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+--- !u!114 &3915397559216223104 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 8857808346084848285, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+  m_PrefabInstance: {fileID: 5529022413425279261}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8918909928772190229}
-  m_Enabled: 0
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a6f4752ed3b7f2f408b07131ec0fcebe, type: 3}
+  m_Script: {fileID: 11500000, guid: 76a0d359dd9f23741b00c49dab1df4a1, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: RuleGame.Core::RuleGame.Core.Rules.Debugging.RuleSystemTestInput
-  _attribute: 0
-  _relation: 0
+  m_EditorClassIdentifier: RuleGame.Dialogue.UI::RuleGame.UI.Dialogue.DialogueToolkitPresenter
+--- !u!4 &4075005351229066971 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8373980963187724230, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+  m_PrefabInstance: {fileID: 5529022413425279261}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &4980979459050501632 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 694951796952266525, guid: 49e067f720c1a44f188449996d1f7f27, type: 3}
+  m_PrefabInstance: {fileID: 5529022413425279261}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fa3d509cb046fb44d9554d3fc49ef841, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: RuleGame.Dialogue::RuleGame.Gameplay.Dialogue.DialogueHost

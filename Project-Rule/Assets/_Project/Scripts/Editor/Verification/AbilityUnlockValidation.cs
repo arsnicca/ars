@@ -3,6 +3,7 @@ using RuleGame.Gameplay.Common;
 using RuleGame.Gameplay.Player;
 using RuleGame.Gameplay.Scene.Components;
 using RuleGame.Infrastructure.Rules;
+using RuleGame.UI.Launch;
 using RuleGame.UI.RuleWheel;
 using UnityEditor;
 using UnityEngine;
@@ -26,6 +27,23 @@ namespace RuleGame.Editor.Verification
                 Check(progress.IsUnlocked(AttributeId.Gravity, RelationId.Revert), "开局只有重力×反转", ref passed);
                 Check(!progress.IsUnlocked(AttributeId.Friction, RelationId.Revert), "摩擦开局锁着", ref passed);
                 Check(!progress.IsUnlocked(AttributeId.Gravity, RelationId.Nullify), "失效开局锁着", ref passed);
+
+                // 续档：必须关掉开发期「规则全开」，否则轮盘会放行玩家没解锁的词条
+                // （2026-10-21 修：StartStreaming 续档分支以前直接跳过 StartNewGame，开关一路留着）。
+                var continueObject = new GameObject("ContinueSessionValidation");
+                try
+                {
+                    var continueProgress = continueObject.AddComponent<PlayerProgress>();
+                    Check(continueProgress.IsUnlocked(AttributeId.Friction, RelationId.Nullify),
+                          "调试场景默认规则全开", ref passed);
+                    continueProgress.ContinueFromSave();
+                    Check(!continueProgress.IsUnlocked(AttributeId.Friction, RelationId.Nullify),
+                          "续档关掉开发期全开（摩擦×失效回到锁定）", ref passed);
+                }
+                finally
+                {
+                    Object.DestroyImmediate(continueObject);
+                }
 
                 int attributeEvents = 0, relationEvents = 0;
                 progress.AttributeUnlocked += _ => attributeEvents++;
@@ -73,6 +91,40 @@ namespace RuleGame.Editor.Verification
                     Object.DestroyImmediate(chestObject);
                 }
 
+                // 生命 / 能量宝箱：直接抬上限（2026-10-20），并且记在玩家账本上。
+                var status = root.AddComponent<EntityStatus>();
+                float baseHealth = status.HealthMax, baseEnergy = status.EnergyMax;
+
+                Check(progress.TryGrant("validation-health", new CityReward(CityRewardKind.Health, 20)),
+                      "生命宝箱提升上限", ref passed);
+                Check(Mathf.Approximately(status.HealthMax, baseHealth + 20f),
+                      $"生命上限 +20（{status.HealthMax}）", ref passed);
+                Check(Mathf.Approximately(status.Health, status.HealthMax),
+                      "当前生命同步抬高到新上限", ref passed);
+                Check(Mathf.Approximately(progress.MaxHealthBonus, 20f),
+                      $"生命上限增量记账（{progress.MaxHealthBonus}）", ref passed);
+
+                Check(progress.TryGrant("validation-energy", new CityReward(CityRewardKind.Energy, 30)),
+                      "能量宝箱提升上限", ref passed);
+                Check(Mathf.Approximately(status.EnergyMax, baseEnergy + 30f),
+                      $"能量上限 +30（{status.EnergyMax}）", ref passed);
+                Check(Mathf.Approximately(progress.MaxEnergyBonus, 30f),
+                      $"能量上限增量记账（{progress.MaxEnergyBonus}）", ref passed);
+
+                Check(!progress.TryGrant("validation-health", new CityReward(CityRewardKind.Health, 20)),
+                      "同一生命宝箱不重复提升", ref passed);
+                Check(Mathf.Approximately(status.HealthMax, baseHealth + 20f),
+                      "重复领取没有叠加", ref passed);
+
+                // 读档恢复：绝对值，不叠加（调两次应当停在同一处）。
+                progress.RestoreProgress(new[] { "validation-health" }, 5f, 7f);
+                Check(Mathf.Approximately(status.HealthMax, baseHealth + 5f)
+                      && Mathf.Approximately(status.EnergyMax, baseEnergy + 7f),
+                      $"读档回灌上限增量（{status.HealthMax}/{status.EnergyMax}）", ref passed);
+                progress.RestoreProgress(new[] { "validation-health" }, 5f, 7f);
+                Check(Mathf.Approximately(status.HealthMax, baseHealth + 5f),
+                      "读档回灌是绝对值（不重复累加）", ref passed);
+
                 // 直接读 BuildTuning：锁住时不该打包出二段跳 / 贴墙参数。
                 var contents = PrefabUtility.LoadPrefabContents("Assets/_Project/Prefabs/LevelRuntime.prefab");
                 try
@@ -88,6 +140,13 @@ namespace RuleGame.Editor.Verification
                     runtimePlayer.SetUnlockedAbilities(PlayerAbility.All);
                     var unlocked = (MotionTuning)build.Invoke(runtimePlayer, null);
                     Check(unlocked.MaxAirJumps == 1 && unlocked.WallClimbEnabled, "解锁后打包参数恢复二段跳 / 贴墙", ref passed);
+
+                    // 读档回灌能力位（2026-10-21 新增：能力位随档存取）。
+                    var prefabProgressInContents = runtimePlayer.GetComponent<PlayerProgress>();
+                    var progressStore = (RuleGame.Infrastructure.Persistence.IPlayerProgressStore)prefabProgressInContents;
+                    var wanted = PlayerAbility.WallClimb | PlayerAbility.Throw;
+                    progressStore.RestoreAbilities((int)wanted);
+                    Check(runtimePlayer.UnlockedAbilities == wanted, "读档能力位回灌到玩家", ref passed);
                 }
                 finally
                 {
@@ -128,8 +187,17 @@ namespace RuleGame.Editor.Verification
                 if (vitalsUxml != null)
                 {
                     var tree = vitalsUxml.Instantiate();
-                    Check(tree.Q("unlockToast") != null, "解锁提示标签存在", ref passed);
+                    Check(tree.Q("abilityScreen") != null, "解锁黑幕元素存在", ref passed);
+                    Check(tree.Q<Label>("abilityName") != null && tree.Q<Label>("abilityHint") != null,
+                        "黑幕上的能力名与「按任意键」提示存在", ref passed);
                 }
+
+                // 黑幕组件必须挂在 HUD 那份 UIDocument 上，否则解锁只会静默打日志。
+                var vitalsHost = prefab != null ? prefab.transform.Find("Player Vitals") : null;
+                Check(vitalsHost != null
+                      && vitalsHost.GetComponent<UIDocument>() != null
+                      && vitalsHost.GetComponent<AbilityUnlockOverlay>() != null,
+                    "Player Vitals 挂了 AbilityUnlockOverlay（与 UIDocument 同物体）", ref passed);
 
                 Debug.Log("[AbilityUnlock] 通过 " + passed + " 项");
             }
